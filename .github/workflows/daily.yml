@@ -1,0 +1,41 @@
+name: Daily Stepik Stats
+
+on:
+  schedule:
+    # Runs at 08:00 UTC = 11:00 Moscow time every day
+    - cron: '0 8 * * *'
+  workflow_dispatch:   # allows manual run from GitHub Actions UI
+
+jobs:
+  collect:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write   # needed to commit back to the repo
+
+    steps:
+      - name: Checkout repo
+        uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+
+      - name: Install dependencies
+        run: pip install requests cryptography
+
+      - name: Run Stepik tracker
+        env:
+          STEPIK_CLIENT_ID:     ${{ secrets.STEPIK_CLIENT_ID }}
+          STEPIK_CLIENT_SECRET: ${{ secrets.STEPIK_CLIENT_SECRET }}
+          DASHBOARD_PASSWORD:   ${{ secrets.DASHBOARD_PASSWORD }}
+        run: python stepik_tracker.py
+
+      - name: Commit updated stats
+        run: |
+          git config user.name  "github-actions[bot]"
+          git config user.email "github-actions[bot]@users.noreply.github.com"
+          git add stepik_stats.json stepik_report.html
+          git diff --staged --quiet && echo "Nothing to commit" || \
+            git commit -m "stats: $(date -u +%Y-%m-%d)"
+          git push

@@ -1,0 +1,15 @@
+# Local secrets (never commit these)
+.env
+*.env
+stepik_secrets.rtf
+
+# Python
+__pycache__/
+*.pyc
+*.pyo
+.venv/
+venv/
+
+# OS
+.DS_Store
+Thumbs.db

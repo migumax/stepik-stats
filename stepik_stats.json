@@ -1,0 +1,66 @@
+{
+  "snapshots": [
+    {
+      "date": "2026-04-11",
+      "timestamp": "2026-04-11 19:12",
+      "followers": 64,
+      "knowledge": 33,
+      "courses": [
+        {
+          "id": 282400,
+          "title": "Аналитика с ИИ",
+          "price": 0.0,
+          "learners": 0,
+          "is_free": true,
+          "sales_count": 0,
+          "revenue": 0.0
+        },
+        {
+          "id": 281606,
+          "title": "Yandex DataSphere: Аналитика в Облаке",
+          "price": 0.0,
+          "learners": 21,
+          "is_free": true,
+          "sales_count": 0,
+          "revenue": 0.0
+        },
+        {
+          "id": 280745,
+          "title": "Data Quality: находим ошибки в данных с помощью SQL",
+          "price": 0.0,
+          "learners": 39,
+          "is_free": true,
+          "sales_count": 0,
+          "revenue": 0.0
+        },
+        {
+          "id": 278080,
+          "title": "Data Quality в пайплайнах: SQL, Python, Great Expectations",
+          "price": 1490.0,
+          "learners": 6,
+          "is_free": false,
+          "sales_count": 9,
+          "revenue": 11761.0
+        },
+        {
+          "id": 276715,
+          "title": "DuckDB на практике: SQL-аналитика прямо в Python и файлах",
+          "price": 790.0,
+          "learners": 17,
+          "is_free": false,
+          "sales_count": 17,
+          "revenue": 10326.2
+        },
+        {
+          "id": 272963,
+          "title": "Система данных в Yandex Cloud: Airflow + PostgreSQL + DataLens",
+          "price": 1990.0,
+          "learners": 23,
+          "is_free": false,
+          "sales_count": 26,
+          "revenue": 51817.2
+        }
+      ]
+    }
+  ]
+}
