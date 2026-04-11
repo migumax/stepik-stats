@@ -76,6 +76,7 @@ def get_courses(token):
             "learners":     c.get("learners_count", 0),
             "is_free":      c.get("price") is None or float(c.get("price") or 0) == 0,
             "is_published": is_published,
+            "cover":        c.get("cover", ""),
             "rating":       0.0,   # filled later via get_course_reviews
             "reviews":      0,     # filled later via get_course_reviews
         })
@@ -217,6 +218,20 @@ def compute_delta(snapshots_sorted: list) -> dict:
         }
     return delta
 
+# ── Monthly aggregation helper ───────────────────────────────────────────────
+def monthly_course_counts(snapshots_sorted):
+    """Return (months_list, counts_list) — last snapshot per month, active course count."""
+    by_month = {}
+    for s in snapshots_sorted:
+        month = s["date"][:7]  # YYYY-MM
+        by_month[month] = s   # keep latest for each month
+    months = sorted(by_month.keys())
+    counts = [
+        sum(1 for c in by_month[m].get("courses", []) if c.get("is_published", True))
+        for m in months
+    ]
+    return months, counts
+
 # ── HTML dashboard (inner content) ───────────────────────────────────────────
 def generate_inner_html(data):
     snapshots = data["snapshots"]
@@ -224,14 +239,17 @@ def generate_inner_html(data):
         return "<html><body><p>No data yet.</p></body></html>"
 
     snapshots_sorted = sorted(snapshots, key=lambda x: x["date"])
-    latest = snapshots_sorted[-1]
-    dates  = [s["date"] for s in snapshots_sorted]
-    delta  = compute_delta(snapshots_sorted)
+    latest  = snapshots_sorted[-1]
+    dates   = [s["date"] for s in snapshots_sorted]
+    delta   = compute_delta(snapshots_sorted)
+
+    # Monthly data
+    months, monthly_counts = monthly_course_counts(snapshots_sorted)
 
     # Only published courses
     published_courses = [c for c in latest.get("courses", []) if c.get("is_published", True)]
 
-    # Collect all unique published course IDs across all snapshots
+    # All unique published courses across all snapshots
     all_courses = {}
     for s in snapshots_sorted:
         for c in s.get("courses", []):
@@ -239,21 +257,18 @@ def generate_inner_html(data):
                 all_courses[c["id"]] = c["title"]
 
     followers_series = [s["followers"] for s in snapshots_sorted]
+    colors = ["#4f8ef7", "#f76c4f", "#4fc98e", "#f7c04f", "#9b4ff7", "#4ff7f1"]
 
     course_series = {}
     for cid, ctitle in all_courses.items():
-        course_series[cid] = {"title": ctitle, "learners": [], "sales": [], "revenue": []}
+        course_series[cid] = {"title": ctitle, "learners": [], "revenue": []}
         for s in snapshots_sorted:
             found = next((c for c in s.get("courses", []) if c["id"] == cid and c.get("is_published", True)), None)
             course_series[cid]["learners"].append(found["learners"] if found else None)
-            course_series[cid]["sales"].append(found.get("sales_count", 0) if found else None)
-            # Store NET revenue (after commission) in chart
             gross = found.get("revenue", 0) if found else 0
             course_series[cid]["revenue"].append(round(gross * ORGANIC_AUTHOR_SHARE, 2))
 
-    colors = ["#4f8ef7", "#f76c4f", "#4fc98e", "#f7c04f", "#9b4ff7", "#4ff7f1"]
-
-    # ── KPI totals (published only) ──
+    # KPI totals
     total_gross    = sum(c.get("revenue", 0)     for c in published_courses)
     total_net      = total_gross * ORGANIC_AUTHOR_SHARE
     total_sales    = sum(c.get("sales_count", 0) for c in published_courses)
@@ -261,72 +276,84 @@ def generate_inner_html(data):
     followers      = latest.get("followers", 0)
     updated_at     = latest.get("timestamp", latest["date"])
 
-    # ── Delta badges ──
     def delta_badge(val, is_money=False):
         if not delta or val == 0:
             return ""
         if val > 0:
             txt = f"+{val:,.0f} ₽" if is_money else f"+{val}"
             return f'<span class="delta up">▲ {txt}</span>'
-        else:
-            txt = f"{val:,.0f} ₽" if is_money else f"{val}"
-            return f'<span class="delta dn">▼ {txt}</span>'
+        txt = f"{val:,.0f} ₽" if is_money else f"{val}"
+        return f'<span class="delta dn">▼ {txt}</span>'
 
     d_followers = delta_badge(delta.get("followers", 0))
     d_learners  = delta_badge(delta.get("learners",  0))
     d_sales     = delta_badge(delta.get("sales",     0))
     d_revenue   = delta_badge(delta.get("revenue", 0) * ORGANIC_AUTHOR_SHARE, is_money=True)
 
-    # ── Course rows ──
     def course_rows_html():
         rows = []
         for cid, cs in course_series.items():
-            cd = next((c for c in published_courses if c["id"] == cid), {})
-            price   = f"{cd.get('price', 0):.0f} ₽" if not cd.get("is_free") else "Бесплатно"
-            sales   = cd.get("sales_count", 0)
-            gross   = cd.get("revenue", 0.0)
-            net     = gross * ORGANIC_AUTHOR_SHARE
-            lrn     = cd.get("learners", 0)
-            rating  = cd.get("rating", 0)
-            reviews = cd.get("reviews", 0)
-            title   = cs["title"]
-
-            # course delta
-            cd_delta = delta.get("courses", {}).get(cid, {})
-            d_lrn  = delta_badge(cd_delta.get("learners", 0))
-            d_sale = delta_badge(cd_delta.get("sales",    0))
-            d_net  = delta_badge(cd_delta.get("revenue",  0) * ORGANIC_AUTHOR_SHARE, is_money=True)
-
-            # rating stars
-            stars = ""
+            cd     = next((c for c in published_courses if c["id"] == cid), {})
+            price  = f"{cd.get('price',0):.0f} ₽" if not cd.get("is_free") else "Бесплатно"
+            net    = cd.get("revenue", 0.0) * ORGANIC_AUTHOR_SHARE
+            lrn    = cd.get("learners", 0)
+            rating = cd.get("rating", 0)
+            reviews= cd.get("reviews", 0)
+            cd_d   = delta.get("courses", {}).get(cid, {})
+            d_lrn  = delta_badge(cd_d.get("learners", 0))
+            d_sale = delta_badge(cd_d.get("sales",    0))
+            d_net  = delta_badge(cd_d.get("revenue",  0) * ORGANIC_AUTHOR_SHARE, is_money=True)
+            stars  = ""
             if rating:
                 filled = round(rating)
-                stars = "★" * filled + "☆" * (5 - filled)
-                stars = f'<span class="stars" title="{rating}">{stars} <small>{rating}</small></span>'
-
-            rows.append(f"""
-              <tr>
-                <td><a href="https://stepik.org/course/{cid}" target="_blank">{title}</a></td>
+                stars  = f'<span class="stars" title="{rating}">{"★"*filled}{"☆"*(5-filled)} <small>{rating}</small></span>'
+            rows.append(f"""<tr>
+                <td><a href="https://stepik.org/course/{cid}" target="_blank">{cs["title"]}</a></td>
                 <td>{price}</td>
                 <td class="num">{lrn} {d_lrn}</td>
                 <td class="num">{stars}{f" {reviews} отз." if reviews else ""}</td>
-                <td class="num">{sales} {d_sale}</td>
+                <td class="num">{cd.get("sales_count",0)} {d_sale}</td>
                 <td class="num">{net:,.0f} ₽ {d_net}</td>
               </tr>""")
         return "".join(rows)
 
-    def js_datasets(key, apply_share=False):
+    def js_datasets(series_key):
         ds = []
         for i, (cid, cs) in enumerate(course_series.items()):
-            color = colors[i % len(colors)]
-            vals  = cs[key]
-            if apply_share:
-                vals = [round(v * ORGANIC_AUTHOR_SHARE, 0) if v is not None else None for v in vals]
+            vals  = cs[series_key]
             if all(v == 0 or v is None for v in vals):
                 continue
-            label = cs["title"][:40].replace('"', "'")
-            ds.append(f"""{{label:"{label}",data:{json.dumps(vals)},borderColor:"{color}",backgroundColor:"{color}22",tension:0.3,fill:false}}""")
+            color = colors[i % len(colors)]
+            label = cs["title"][:42].replace('"', "'")
+            ds.append(f"""{{label:"{label}",data:{json.dumps(vals)},borderColor:"{color}",backgroundColor:"{color}22",tension:0.3,fill:false,pointRadius:4}}""")
         return ",\n".join(ds)
+
+    # Course catalog cards HTML
+    def catalog_cards_html():
+        cards = []
+        for cd in published_courses:
+            cid    = cd["id"]
+            title  = cd["title"]
+            cover  = cd.get("cover", "")
+            lrn    = cd.get("learners", 0)
+            rating = cd.get("rating", 0)
+            reviews= cd.get("reviews", 0)
+            price  = f"{cd.get('price',0):.0f} ₽" if not cd.get("is_free") else "Бесплатно"
+            stars  = f'{"★" * round(rating)}{"☆" * (5 - round(rating))} {rating}' if rating else ""
+            img    = f'<img src="{cover}" alt="" onerror="this.style.display=\'none\'">' if cover else '<div class="no-cover"></div>'
+            cards.append(f"""<a class="course-card" href="https://stepik.org/course/{cid}" target="_blank">
+              <div class="course-thumb">{img}</div>
+              <div class="course-info">
+                <div class="course-title">{title}</div>
+                <div class="course-meta">
+                  <span>{lrn} студ.</span>
+                  {f'<span class="stars-sm">{stars}</span>' if stars else ""}
+                  {f'<span>{reviews} отз.</span>' if reviews else ""}
+                  <span class="price-tag">{price}</span>
+                </div>
+              </div>
+            </a>""")
+        return "\n".join(cards)
 
     return f"""<!DOCTYPE html>
 <html lang="ru">
@@ -336,35 +363,84 @@ def generate_inner_html(data):
 <title>Stepik Dashboard — Максим Мигутин</title>
 <script src="https://cdn.jsdelivr.net/npm/chart.js@4.4.0/dist/chart.umd.min.js"></script>
 <style>
-  *{{box-sizing:border-box;margin:0;padding:0}}
-  body{{font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',sans-serif;background:#0f1117;color:#e0e0e0}}
-  header{{background:#1a1d27;padding:20px 32px;border-bottom:1px solid #2a2d3a;display:flex;align-items:center;gap:16px}}
-  header h1{{font-size:20px;font-weight:600;color:#fff}}
-  header .sub{{color:#888;font-size:13px}}
-  .kpi-grid{{display:grid;grid-template-columns:repeat(4,1fr);gap:16px;padding:24px 32px}}
-  .kpi{{background:#1a1d27;border-radius:12px;padding:20px 24px;border:1px solid #2a2d3a}}
-  .kpi .val{{font-size:32px;font-weight:700;color:#4f8ef7}}
-  .kpi .lbl{{font-size:13px;color:#888;margin-top:4px}}
-  .kpi .hint{{font-size:11px;color:#555;margin-top:2px}}
-  .charts{{display:grid;grid-template-columns:1fr 1fr 1fr;gap:16px;padding:0 32px 24px}}
-  .chart-box{{background:#1a1d27;border-radius:12px;padding:20px;border:1px solid #2a2d3a}}
-  .chart-box h3{{font-size:14px;color:#aaa;margin-bottom:16px}}
-  .section{{padding:0 32px 32px}}
-  table{{width:100%;border-collapse:collapse;background:#1a1d27;border-radius:12px;overflow:hidden;border:1px solid #2a2d3a}}
-  th{{background:#22253a;color:#888;font-size:12px;text-transform:uppercase;letter-spacing:.05em;padding:12px 16px;text-align:left}}
-  td{{padding:12px 16px;border-top:1px solid #2a2d3a;font-size:14px}}
-  td a{{color:#4f8ef7;text-decoration:none}}
-  td a:hover{{text-decoration:underline}}
-  .num{{text-align:right;font-variant-numeric:tabular-nums}}
-  .footer{{text-align:center;padding:16px;color:#555;font-size:12px}}
-  .delta{{font-size:11px;font-weight:600;padding:2px 6px;border-radius:4px;margin-left:4px;white-space:nowrap}}
-  .delta.up{{color:#4fc98e;background:#4fc98e18}}
-  .delta.dn{{color:#f76c4f;background:#f76c4f18}}
-  .stars{{color:#f7c04f;font-size:13px}}
-  .stars small{{color:#888;font-size:11px}}
+*{{box-sizing:border-box;margin:0;padding:0}}
+body{{font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',sans-serif;background:#0f1117;color:#e0e0e0}}
+header{{background:#1a1d27;padding:20px 32px;border-bottom:1px solid #2a2d3a;display:flex;align-items:center;gap:16px}}
+header h1{{font-size:20px;font-weight:600;color:#fff}}
+header .sub{{color:#888;font-size:13px}}
+.kpi-grid{{display:grid;grid-template-columns:repeat(4,1fr);gap:16px;padding:24px 32px}}
+.kpi{{background:#1a1d27;border-radius:12px;padding:20px 24px;border:1px solid #2a2d3a}}
+.kpi .val{{font-size:30px;font-weight:700;color:#4f8ef7;display:flex;align-items:center;gap:8px;flex-wrap:wrap}}
+.kpi .lbl{{font-size:13px;color:#888;margin-top:4px}}
+.kpi .hint{{font-size:11px;color:#555;margin-top:2px}}
+.charts{{display:grid;grid-template-columns:1fr 1fr 1fr;gap:16px;padding:0 32px 0}}
+.charts-bottom{{display:grid;grid-template-columns:1fr;gap:16px;padding:16px 32px 24px}}
+.chart-box{{background:#1a1d27;border-radius:12px;padding:20px;border:1px solid #2a2d3a;position:relative}}
+.chart-box .chart-header{{display:flex;justify-content:space-between;align-items:center;margin-bottom:16px}}
+.chart-box h3{{font-size:14px;color:#aaa;margin:0}}
+.expand-btn{{background:none;border:1px solid #3a3d4a;border-radius:6px;color:#888;cursor:pointer;
+             font-size:13px;padding:3px 8px;transition:.15s;line-height:1}}
+.expand-btn:hover{{border-color:#4f8ef7;color:#4f8ef7}}
+.section{{padding:0 32px 32px}}
+.section-header{{display:flex;justify-content:space-between;align-items:center;margin-bottom:14px}}
+.section-header h2{{font-size:15px;font-weight:600;color:#ccc}}
+table{{width:100%;border-collapse:collapse;background:#1a1d27;border-radius:12px;overflow:hidden;border:1px solid #2a2d3a}}
+th{{background:#22253a;color:#888;font-size:12px;text-transform:uppercase;letter-spacing:.05em;padding:12px 16px;text-align:left}}
+td{{padding:12px 16px;border-top:1px solid #2a2d3a;font-size:14px}}
+td a{{color:#4f8ef7;text-decoration:none}}
+td a:hover{{text-decoration:underline}}
+.num{{text-align:right;font-variant-numeric:tabular-nums}}
+.delta{{font-size:11px;font-weight:600;padding:2px 6px;border-radius:4px;margin-left:4px;white-space:nowrap}}
+.delta.up{{color:#4fc98e;background:#4fc98e18}}
+.delta.dn{{color:#f76c4f;background:#f76c4f18}}
+.stars{{color:#f7c04f;font-size:13px}}
+.stars small{{color:#888;font-size:11px}}
+.stars-sm{{color:#f7c04f;font-size:11px}}
+/* Course catalog */
+.catalog-grid{{display:grid;grid-template-columns:repeat(auto-fill,minmax(240px,1fr));gap:16px;margin-top:4px}}
+.course-card{{background:#1a1d27;border:1px solid #2a2d3a;border-radius:12px;overflow:hidden;
+              text-decoration:none;color:inherit;transition:.15s;display:flex;flex-direction:column}}
+.course-card:hover{{border-color:#4f8ef7;transform:translateY(-2px)}}
+.course-thumb{{height:130px;overflow:hidden;background:#12141e;display:flex;align-items:center;justify-content:center}}
+.course-thumb img{{width:100%;height:100%;object-fit:cover}}
+.no-cover{{width:100%;height:100%;background:linear-gradient(135deg,#1e2236,#2a2d4a)}}
+.course-info{{padding:14px}}
+.course-title{{font-size:13px;font-weight:600;color:#e0e0e0;line-height:1.4;margin-bottom:8px}}
+.course-meta{{display:flex;flex-wrap:wrap;gap:8px;font-size:12px;color:#666;align-items:center}}
+.price-tag{{background:#4f8ef718;color:#4f8ef7;padding:2px 7px;border-radius:4px;font-weight:600}}
+/* Modal */
+.modal{{display:none;position:fixed;inset:0;background:#000000cc;z-index:1000;
+        align-items:center;justify-content:center;padding:24px}}
+.modal-inner{{background:#1a1d27;border-radius:16px;border:1px solid #2a2d3a;
+              width:min(1100px,96vw);max-height:90vh;display:flex;flex-direction:column;overflow:hidden}}
+.modal-top{{display:flex;justify-content:space-between;align-items:center;
+            padding:18px 24px;border-bottom:1px solid #2a2d3a}}
+.modal-top h2{{font-size:16px;color:#fff}}
+.modal-close{{background:none;border:1px solid #3a3d4a;border-radius:8px;color:#aaa;
+               cursor:pointer;font-size:16px;padding:4px 12px;transition:.15s}}
+.modal-close:hover{{border-color:#f76c4f;color:#f76c4f}}
+.modal-body{{padding:24px;flex:1;min-height:0;position:relative}}
+.toggle-btn{{background:#22253a;border:1px solid #3a3d4a;border-radius:8px;color:#aaa;
+             cursor:pointer;font-size:13px;padding:8px 16px;transition:.15s}}
+.toggle-btn:hover{{border-color:#4f8ef7;color:#4f8ef7}}
+.footer{{text-align:center;padding:16px;color:#555;font-size:12px}}
 </style>
 </head>
 <body>
+
+<!-- Expand Modal -->
+<div class="modal" id="chartModal" onclick="if(event.target===this)closeModal()">
+  <div class="modal-inner">
+    <div class="modal-top">
+      <h2 id="modalTitle"></h2>
+      <button class="modal-close" onclick="closeModal()">✕ Закрыть</button>
+    </div>
+    <div class="modal-body">
+      <canvas id="modalCanvas"></canvas>
+    </div>
+  </div>
+</div>
+
 <header>
   <div>
     <h1>📊 Stepik Dashboard</h1>
@@ -373,18 +449,9 @@ def generate_inner_html(data):
 </header>
 
 <div class="kpi-grid">
-  <div class="kpi">
-    <div class="val">{followers} {d_followers}</div>
-    <div class="lbl">Подписчиков</div>
-  </div>
-  <div class="kpi">
-    <div class="val">{total_learners} {d_learners}</div>
-    <div class="lbl">Всего студентов</div>
-  </div>
-  <div class="kpi">
-    <div class="val">{total_sales} {d_sales}</div>
-    <div class="lbl">Всего продаж</div>
-  </div>
+  <div class="kpi"><div class="val">{followers} {d_followers}</div><div class="lbl">Подписчиков</div></div>
+  <div class="kpi"><div class="val">{total_learners} {d_learners}</div><div class="lbl">Всего студентов</div></div>
+  <div class="kpi"><div class="val">{total_sales} {d_sales}</div><div class="lbl">Всего продаж</div></div>
   <div class="kpi">
     <div class="val">{total_net:,.0f} ₽ {d_revenue}</div>
     <div class="lbl">Доход (чистый)</div>
@@ -393,9 +460,31 @@ def generate_inner_html(data):
 </div>
 
 <div class="charts">
-  <div class="chart-box"><h3>Подписчики</h3><canvas id="chartFollowers"></canvas></div>
-  <div class="chart-box"><h3>Студенты по курсам</h3><canvas id="chartLearners"></canvas></div>
-  <div class="chart-box"><h3>Чистый доход ₽ по курсам</h3><canvas id="chartRevenue"></canvas></div>
+  <div class="chart-box">
+    <div class="chart-header"><h3>Подписчики</h3></div>
+    <canvas id="chartFollowers"></canvas>
+  </div>
+  <div class="chart-box">
+    <div class="chart-header">
+      <h3>Студенты по курсам</h3>
+      <button class="expand-btn" onclick="expandChart('learners','Студенты по курсам')">⛶ развернуть</button>
+    </div>
+    <canvas id="chartLearners"></canvas>
+  </div>
+  <div class="chart-box">
+    <div class="chart-header">
+      <h3>Чистый доход ₽ по курсам</h3>
+      <button class="expand-btn" onclick="expandChart('revenue','Чистый доход ₽ по курсам')">⛶ развернуть</button>
+    </div>
+    <canvas id="chartRevenue"></canvas>
+  </div>
+</div>
+
+<div class="charts-bottom">
+  <div class="chart-box">
+    <div class="chart-header"><h3>Активных курсов в месяц</h3></div>
+    <canvas id="chartMonthly" style="max-height:160px"></canvas>
+  </div>
 </div>
 
 <div class="section">
@@ -411,16 +500,29 @@ def generate_inner_html(data):
     </thead>
     <tbody>{course_rows_html()}</tbody>
   </table>
-  <div style="margin-top:10px;color:#555;font-size:12px;text-align:right">
-    * Чистый доход = сумма продаж × 60% (органические продажи, без промоссылки автора)
+  <div style="margin-top:8px;color:#555;font-size:12px;text-align:right">
+    * Чистый доход = сумма продаж × 60% (органические, без промоссылки)
+  </div>
+</div>
+
+<!-- Course Catalog -->
+<div class="section">
+  <div class="section-header">
+    <h2>📚 Все курсы</h2>
+    <button class="toggle-btn" id="catalogToggle" onclick="toggleCatalog()">Показать курсы ▾</button>
+  </div>
+  <div id="catalogGrid" style="display:none">
+    <div class="catalog-grid">
+      {catalog_cards_html()}
+    </div>
   </div>
 </div>
 
 <div class="footer">Данные собраны автоматически · {len(snapshots_sorted)} снапшотов</div>
 
 <script>
-const labels = {json.dumps(dates)};
-const opts = {{
+const LABELS = {json.dumps(dates)};
+const baseOpts = {{
   responsive:true,
   plugins:{{legend:{{labels:{{color:'#aaa',boxWidth:12,font:{{size:11}}}}}}}},
   scales:{{
@@ -428,18 +530,93 @@ const opts = {{
     y:{{ticks:{{color:'#666'}},grid:{{color:'#2a2d3a'}}}}
   }}
 }};
-new Chart(document.getElementById('chartFollowers'),{{
-  type:'line',
-  data:{{labels,datasets:[{{label:'Подписчики',data:{json.dumps(followers_series)},
-    borderColor:'#4f8ef7',backgroundColor:'#4f8ef722',tension:0.3,fill:true}}]}},
-  options:opts
+
+// ── Chart configs (stored so we can re-render in modal) ──
+const CHART_CONFIGS = {{
+  followers: {{
+    type:'line',
+    data:{{labels:LABELS, datasets:[{{
+      label:'Подписчики', data:{json.dumps(followers_series)},
+      borderColor:'#4f8ef7',backgroundColor:'#4f8ef722',tension:0.3,fill:true,pointRadius:4
+    }}]}},
+    options:baseOpts
+  }},
+  learners: {{
+    type:'line',
+    data:{{labels:LABELS, datasets:[{js_datasets("learners")}]}},
+    options:baseOpts
+  }},
+  revenue: {{
+    type:'line',
+    data:{{labels:LABELS, datasets:[{js_datasets("revenue")}]}},
+    options:baseOpts
+  }}
+}};
+
+// Render main charts
+new Chart(document.getElementById('chartFollowers'), JSON.parse(JSON.stringify(CHART_CONFIGS.followers)));
+new Chart(document.getElementById('chartLearners'),  JSON.parse(JSON.stringify(CHART_CONFIGS.learners)));
+new Chart(document.getElementById('chartRevenue'),   JSON.parse(JSON.stringify(CHART_CONFIGS.revenue)));
+
+// Monthly active courses bar chart
+new Chart(document.getElementById('chartMonthly'), {{
+  type: 'bar',
+  data: {{
+    labels: {json.dumps(months)},
+    datasets: [{{
+      label: 'Активных курсов',
+      data: {json.dumps(monthly_counts)},
+      backgroundColor: '#4f8ef7aa',
+      borderColor: '#4f8ef7',
+      borderRadius: 6,
+      borderWidth: 1
+    }}]
+  }},
+  options: {{
+    responsive:true,
+    plugins:{{legend:{{display:false}}}},
+    scales:{{
+      x:{{ticks:{{color:'#666'}},grid:{{color:'#2a2d3a'}}}},
+      y:{{ticks:{{color:'#666',stepSize:1}},grid:{{color:'#2a2d3a'}},min:0}}
+    }}
+  }}
 }});
-new Chart(document.getElementById('chartLearners'),{{
-  type:'line',data:{{labels,datasets:[{js_datasets("learners")}]}},options:opts
-}});
-new Chart(document.getElementById('chartRevenue'),{{
-  type:'line',data:{{labels,datasets:[{js_datasets("revenue")}]}},options:opts
-}});
+
+// ── Modal expand ──
+let _modalChart = null;
+
+function expandChart(key, title) {{
+  if (_modalChart) {{ _modalChart.destroy(); _modalChart = null; }}
+  document.getElementById('modalTitle').textContent = title;
+  document.getElementById('chartModal').style.display = 'flex';
+  const ctx = document.getElementById('modalCanvas').getContext('2d');
+  const cfg = JSON.parse(JSON.stringify(CHART_CONFIGS[key]));
+  // Larger points & font in modal
+  if (cfg.options.plugins && cfg.options.plugins.legend)
+    cfg.options.plugins.legend.labels.font = {{size:13}};
+  (cfg.data.datasets || []).forEach(ds => {{ ds.pointRadius = 5; }});
+  _modalChart = new Chart(ctx, cfg);
+}}
+
+function closeModal() {{
+  document.getElementById('chartModal').style.display = 'none';
+  if (_modalChart) {{ _modalChart.destroy(); _modalChart = null; }}
+}}
+
+document.addEventListener('keydown', e => {{ if(e.key==='Escape') closeModal(); }});
+
+// ── Course catalog toggle ──
+function toggleCatalog() {{
+  const grid = document.getElementById('catalogGrid');
+  const btn  = document.getElementById('catalogToggle');
+  if (grid.style.display === 'none') {{
+    grid.style.display = 'block';
+    btn.textContent = 'Скрыть курсы ▴';
+  }} else {{
+    grid.style.display = 'none';
+    btn.textContent = 'Показать курсы ▾';
+  }}
+}}
 </script>
 </body>
 </html>"""
