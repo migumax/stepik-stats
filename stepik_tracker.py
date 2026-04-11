@@ -13,15 +13,24 @@ import requests
 from datetime import datetime, date
 
 # ── Config ──────────────────────────────────────────────────────────────────
-SCRIPT_DIR    = os.path.dirname(os.path.abspath(__file__))
-CLIENT_ID     = os.environ.get("STEPIK_CLIENT_ID",     "AABrP8wduR1BZRbsAfd0DQxKHUnHX9nDvBjjUq0d")
-CLIENT_SECRET = os.environ.get("STEPIK_CLIENT_SECRET", "x6iGc3zAvPpfwMSdF81LXmNJd0v5hMdt2ztiOp3G2gNbDzcSKgu2YAxnCeVam64K6zoVWFHKiiLllhpMAwjQPc7EmtDS2s44vRkQ336fBXzVk54i9UCyFUnKptL1Jn80")
+SCRIPT_DIR = os.path.dirname(os.path.abspath(__file__))
+
+def _require_env(name: str) -> str:
+    val = os.environ.get(name, "").strip()
+    if not val:
+        print(f"❌ ERROR: environment variable {name} is not set.")
+        print(f"   Set it before running:  export {name}=...")
+        sys.exit(1)
+    return val
+
+CLIENT_ID     = os.environ.get("STEPIK_CLIENT_ID", "").strip()     or _require_env("STEPIK_CLIENT_ID")
+CLIENT_SECRET = os.environ.get("STEPIK_CLIENT_SECRET", "").strip() or _require_env("STEPIK_CLIENT_SECRET")
 USER_ID       = 913560008
 DATA_FILE     = os.path.join(SCRIPT_DIR, "stepik_stats.json")
 REPORT_FILE   = os.path.join(SCRIPT_DIR, "stepik_report.html")
 
-# Optional dashboard password — if set, HTML is AES-256-GCM encrypted
-DASHBOARD_PASSWORD = os.environ.get("DASHBOARD_PASSWORD", "")
+# Dashboard password — used to encrypt both HTML and JSON (required)
+DASHBOARD_PASSWORD = os.environ.get("DASHBOARD_PASSWORD", "").strip()
 
 # ── Auth ─────────────────────────────────────────────────────────────────────
 def get_token():
@@ -81,16 +90,70 @@ def get_course_payments(token, course_id):
     revenue = sum(float(p.get("amount", 0)) for p in payments)
     return count, revenue
 
-# ── Persistence ──────────────────────────────────────────────────────────────
-def load_data():
-    if os.path.exists(DATA_FILE):
-        with open(DATA_FILE, "r", encoding="utf-8") as f:
-            return json.load(f)
-    return {"snapshots": []}
+# ── Crypto helpers ───────────────────────────────────────────────────────────
+def _get_crypto():
+    try:
+        from cryptography.hazmat.primitives.kdf.pbkdf2 import PBKDF2HMAC
+        from cryptography.hazmat.primitives import hashes
+        from cryptography.hazmat.primitives.ciphers.aead import AESGCM
+        return PBKDF2HMAC, hashes, AESGCM
+    except ImportError:
+        return None, None, None
 
-def save_data(data):
-    with open(DATA_FILE, "w", encoding="utf-8") as f:
-        json.dump(data, f, ensure_ascii=False, indent=2)
+def _derive_key(password: str, salt: bytes) -> bytes:
+    PBKDF2HMAC, hashes, _ = _get_crypto()
+    kdf = PBKDF2HMAC(algorithm=hashes.SHA256(), length=32, salt=salt, iterations=100_000)
+    return kdf.derive(password.encode("utf-8"))
+
+def encrypt_bytes(plaintext: bytes, password: str) -> dict:
+    """Return dict with salt/iv/ct as base64 strings."""
+    _, _, AESGCM = _get_crypto()
+    salt = os.urandom(16)
+    iv   = os.urandom(12)
+    key  = _derive_key(password, salt)
+    ct   = AESGCM(key).encrypt(iv, plaintext, None)
+    return {
+        "enc":  True,
+        "salt": base64.b64encode(salt).decode(),
+        "iv":   base64.b64encode(iv).decode(),
+        "ct":   base64.b64encode(ct).decode(),
+    }
+
+def decrypt_bytes(blob: dict, password: str) -> bytes:
+    """Decrypt a dict produced by encrypt_bytes."""
+    _, _, AESGCM = _get_crypto()
+    salt = base64.b64decode(blob["salt"])
+    iv   = base64.b64decode(blob["iv"])
+    ct   = base64.b64decode(blob["ct"])
+    key  = _derive_key(password, salt)
+    return AESGCM(key).decrypt(iv, ct, None)
+
+# ── Persistence ──────────────────────────────────────────────────────────────
+def load_data() -> dict:
+    if not os.path.exists(DATA_FILE):
+        return {"snapshots": []}
+    with open(DATA_FILE, "r", encoding="utf-8") as f:
+        raw = json.load(f)
+    # Encrypted file?
+    if raw.get("enc") and DASHBOARD_PASSWORD:
+        try:
+            plaintext = decrypt_bytes(raw, DASHBOARD_PASSWORD)
+            return json.loads(plaintext.decode("utf-8"))
+        except Exception as e:
+            print(f"❌ Could not decrypt {DATA_FILE}: {e}")
+            sys.exit(1)
+    return raw
+
+def save_data(data: dict):
+    if DASHBOARD_PASSWORD:
+        blob = encrypt_bytes(json.dumps(data, ensure_ascii=False, indent=2).encode("utf-8"), DASHBOARD_PASSWORD)
+        with open(DATA_FILE, "w", encoding="utf-8") as f:
+            json.dump(blob, f)
+        print("  🔐 Data encrypted with DASHBOARD_PASSWORD")
+    else:
+        with open(DATA_FILE, "w", encoding="utf-8") as f:
+            json.dump(data, f, ensure_ascii=False, indent=2)
+        print("  ⚠  DASHBOARD_PASSWORD not set — data saved unencrypted")
 
 # ── HTML dashboard (inner content) ───────────────────────────────────────────
 def generate_inner_html(data):
