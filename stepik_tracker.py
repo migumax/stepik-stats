@@ -232,6 +232,19 @@ def monthly_course_counts(snapshots_sorted):
     ]
     return months, counts
 
+# ── Pluralization helper ─────────────────────────────────────────────────────
+def plural_snapshots(n: int) -> str:
+    """Return correct Russian plural: 1 снапшот, 2 снапшота, 5 снапшотов."""
+    if 11 <= n % 100 <= 19:
+        return f"{n} снапшотов"
+    r = n % 10
+    if r == 1:
+        return f"{n} снапшот"
+    elif 2 <= r <= 4:
+        return f"{n} снапшота"
+    else:
+        return f"{n} снапшотов"
+
 # ── HTML dashboard (inner content) ───────────────────────────────────────────
 def generate_inner_html(data):
     snapshots = data["snapshots"]
@@ -245,6 +258,7 @@ def generate_inner_html(data):
 
     # Monthly data
     months, monthly_counts = monthly_course_counts(snapshots_sorted)
+    has_monthly = len(months) >= 2
 
     # Only published courses
     published_courses = [c for c in latest.get("courses", []) if c.get("is_published", True)]
@@ -307,11 +321,15 @@ def generate_inner_html(data):
             if rating:
                 filled = round(rating)
                 stars  = f'<span class="stars" title="{rating}">{"★"*filled}{"☆"*(5-filled)} <small>{rating}</small></span>'
+            if stars or reviews:
+                rating_cell = f'{stars}{f" {reviews} отз." if reviews else ""}'
+            else:
+                rating_cell = '<span style="color:#555">—</span>'
             rows.append(f"""<tr>
                 <td><a href="https://stepik.org/course/{cid}" target="_blank">{cs["title"]}</a></td>
                 <td>{price}</td>
                 <td class="num">{lrn} {d_lrn}</td>
-                <td class="num">{stars}{f" {reviews} отз." if reviews else ""}</td>
+                <td class="num">{rating_cell}</td>
                 <td class="num">{cd.get("sales_count",0)} {d_sale}</td>
                 <td class="num">{net:,.0f} ₽ {d_net}</td>
               </tr>""")
@@ -327,6 +345,32 @@ def generate_inner_html(data):
             label = cs["title"][:42].replace('"', "'")
             ds.append(f"""{{label:"{label}",data:{json.dumps(vals)},borderColor:"{color}",backgroundColor:"{color}22",tension:0.3,fill:false,pointRadius:4}}""")
         return ",\n".join(ds)
+
+    # Monthly chart JS (only when >= 2 months of data)
+    if has_monthly:
+        monthly_chart_js = (
+            "new Chart(document.getElementById('chartMonthly'), {"
+            "  type: 'bar',"
+            "  data: {"
+            f"    labels: {json.dumps(months)},"
+            "    datasets: [{"
+            f"      label: 'Активных курсов', data: {json.dumps(monthly_counts)},"
+            "      backgroundColor: '#4f8ef7aa', borderColor: '#4f8ef7',"
+            "      borderRadius: 6, borderWidth: 1"
+            "    }]"
+            "  },"
+            "  options: {"
+            "    responsive:true,"
+            "    plugins:{legend:{display:false}},"
+            "    scales:{"
+            "      x:{ticks:{color:'#666'},grid:{color:'#2a2d3a'}},"
+            "      y:{ticks:{color:'#666',stepSize:1},grid:{color:'#2a2d3a'},min:0}"
+            "    }"
+            "  }"
+            "});"
+        )
+    else:
+        monthly_chart_js = "// Monthly chart: not enough data (<2 months)"
 
     # Course catalog cards HTML
     def catalog_cards_html():
@@ -480,12 +524,7 @@ td a:hover{{text-decoration:underline}}
   </div>
 </div>
 
-<div class="charts-bottom">
-  <div class="chart-box">
-    <div class="chart-header"><h3>Активных курсов в месяц</h3></div>
-    <canvas id="chartMonthly" style="max-height:160px"></canvas>
-  </div>
-</div>
+{"<div class='charts-bottom'><div class='chart-box'><div class='chart-header'><h3>Активных курсов в месяц</h3></div><canvas id='chartMonthly' style='max-height:160px'></canvas></div></div>" if has_monthly else "<div class='charts-bottom'><div class='chart-box' style='text-align:center;padding:32px 0'><div class='chart-header' style='justify-content:center'><h3>Активных курсов в месяц</h3></div><p style='color:#555;font-size:13px;margin-top:8px'>График появится когда накопится ≥ 2 месяцев данных</p></div></div>"}
 
 <div class="section">
   <table>
@@ -518,7 +557,7 @@ td a:hover{{text-decoration:underline}}
   </div>
 </div>
 
-<div class="footer">Данные собраны автоматически · {len(snapshots_sorted)} снапшотов</div>
+<div class="footer">Данные собраны автоматически · {plural_snapshots(len(snapshots_sorted))}</div>
 
 <script>
 const LABELS = {json.dumps(dates)};
@@ -558,29 +597,7 @@ new Chart(document.getElementById('chartFollowers'), JSON.parse(JSON.stringify(C
 new Chart(document.getElementById('chartLearners'),  JSON.parse(JSON.stringify(CHART_CONFIGS.learners)));
 new Chart(document.getElementById('chartRevenue'),   JSON.parse(JSON.stringify(CHART_CONFIGS.revenue)));
 
-// Monthly active courses bar chart
-new Chart(document.getElementById('chartMonthly'), {{
-  type: 'bar',
-  data: {{
-    labels: {json.dumps(months)},
-    datasets: [{{
-      label: 'Активных курсов',
-      data: {json.dumps(monthly_counts)},
-      backgroundColor: '#4f8ef7aa',
-      borderColor: '#4f8ef7',
-      borderRadius: 6,
-      borderWidth: 1
-    }}]
-  }},
-  options: {{
-    responsive:true,
-    plugins:{{legend:{{display:false}}}},
-    scales:{{
-      x:{{ticks:{{color:'#666'}},grid:{{color:'#2a2d3a'}}}},
-      y:{{ticks:{{color:'#666',stepSize:1}},grid:{{color:'#2a2d3a'}},min:0}}
-    }}
-  }}
-}});
+{monthly_chart_js}
 
 // ── Modal expand ──
 let _modalChart = null;
