@@ -140,8 +140,9 @@ def load_data() -> dict:
             plaintext = decrypt_bytes(raw, DASHBOARD_PASSWORD)
             return json.loads(plaintext.decode("utf-8"))
         except Exception as e:
-            print(f"❌ Could not decrypt {DATA_FILE}: {e}")
-            sys.exit(1)
+            print(f"  ⚠  Could not decrypt {DATA_FILE} (wrong password or corrupted).")
+            print(f"     Starting fresh — previous history lost.")
+            return {"snapshots": []}
     return raw
 
 def save_data(data: dict):
