@@ -2,6 +2,8 @@
 
 Автоматический сбор статистики курсов Stepik с ежедневным обновлением через GitHub Actions и публикацией на GitHub Pages.
 
+🔗 **[Открыть дашборд →](https://migumax.github.io/stepik-stats/stepik_report.html)**
+
 ## Как это работает
 
 1. **GitHub Actions** запускает `stepik_tracker.py` каждый день в 11:00 по Москве
