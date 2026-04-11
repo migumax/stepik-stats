@@ -35,7 +35,7 @@ jobs:
         run: |
           git config user.name  "github-actions[bot]"
           git config user.email "github-actions[bot]@users.noreply.github.com"
-          git add stepik_stats.json stepik_report.html
+          git add -f stepik_stats.json stepik_report.html
           git diff --staged --quiet && echo "Nothing to commit" || \
             git commit -m "stats: $(date -u +%Y-%m-%d)"
           git push
