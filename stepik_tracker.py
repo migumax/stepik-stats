@@ -670,37 +670,109 @@ def encrypt_to_shell_html(inner_html: str, password: str) -> str:
   body{{background:#0f1117;color:#e0e0e0;font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',sans-serif;
        display:flex;justify-content:center;align-items:center;min-height:100vh}}
   .box{{background:#1a1d27;border:1px solid #2a2d3a;border-radius:16px;padding:40px 48px;
-        text-align:center;width:340px}}
+        text-align:center;width:360px}}
   .box h1{{font-size:22px;margin-bottom:8px;color:#fff}}
   .box p{{color:#888;font-size:13px;margin-bottom:28px}}
-  input{{width:100%;padding:12px 16px;border-radius:8px;border:1px solid #3a3d4a;
+  .pwd-wrap{{position:relative}}
+  .pwd-wrap input{{width:100%;padding:12px 44px 12px 16px;border-radius:8px;border:1px solid #3a3d4a;
          background:#12141e;color:#fff;font-size:15px;outline:none;transition:.2s}}
-  input:focus{{border-color:#4f8ef7}}
-  button{{margin-top:12px;width:100%;padding:12px;border-radius:8px;border:none;
+  .pwd-wrap input:focus{{border-color:#4f8ef7}}
+  .eye-btn{{position:absolute;right:12px;top:50%;transform:translateY(-50%);
+            background:none;border:none;cursor:pointer;padding:4px;color:#555;
+            display:flex;align-items:center;transition:.15s;margin:0;width:auto}}
+  .eye-btn:hover{{color:#aaa}}
+  button#btn{{margin-top:12px;width:100%;padding:12px;border-radius:8px;border:none;
           background:#4f8ef7;color:#fff;font-size:15px;cursor:pointer;transition:.15s}}
-  button:hover{{background:#3a7ae8}}
-  button:active{{transform:scale(.98)}}
-  #err{{margin-top:12px;color:#f76c4f;font-size:13px;display:none}}
+  button#btn:hover:not(:disabled){{background:#3a7ae8}}
+  button#btn:active:not(:disabled){{transform:scale(.98)}}
+  button#btn:disabled{{background:#2a3a5a;cursor:not-allowed;opacity:.7}}
+  #err{{margin-top:12px;color:#f76c4f;font-size:13px;display:none;line-height:1.5}}
   #spinner{{margin-top:12px;color:#888;font-size:13px;display:none}}
+  #lockout{{margin-top:12px;background:#2a1a1a;border:1px solid #5a2a2a;border-radius:8px;
+            padding:12px;font-size:13px;color:#f7a04f;display:none;line-height:1.6}}
+  #lockout strong{{color:#f76c4f}}
+  .attempts-hint{{margin-top:8px;font-size:11px;color:#555}}
 </style>
 </head>
 <body>
 <div class="box">
   <h1>📊 Stepik Dashboard</h1>
   <p>Введите пароль для просмотра</p>
-  <input type="password" id="pwd" placeholder="Пароль" autofocus>
+  <div class="pwd-wrap">
+    <input type="password" id="pwd" placeholder="Пароль" autofocus>
+    <button class="eye-btn" type="button" id="eyeBtn" onclick="toggleEye()" title="Показать/скрыть пароль">
+      <svg id="eyeIcon" width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+        <path d="M1 12s4-8 11-8 11 8 11 8-4 8-11 8-11-8-11-8z"/><circle cx="12" cy="12" r="3"/>
+      </svg>
+    </button>
+  </div>
   <button id="btn" onclick="unlock()">Открыть</button>
   <div id="spinner">Расшифровываю...</div>
-  <div id="err">Неверный пароль</div>
+  <div id="err"></div>
+  <div id="lockout"></div>
 </div>
 <script>
 const SALT_B64="{salt_b64}";
 const IV_B64="{iv_b64}";
 const CT_B64="{ct_b64}";
 
+// ── Brute-force protection ──────────────────────────────────────────────────
+// Lockout durations (seconds) after reaching threshold attempts
+const LOCKOUT_STEPS = [30, 120, 600]; // 30s → 2min → 10min
+let failCount = 0;
+let lockedUntil = 0;
+let countdownTimer = null;
+
+function remainingSeconds() {{
+  return Math.max(0, Math.ceil((lockedUntil - Date.now()) / 1000));
+}}
+
+function fmtTime(s) {{
+  if (s >= 60) return Math.ceil(s/60) + ' мин ' + (s%60 ? (s%60)+' сек' : '');
+  return s + ' сек';
+}}
+
+function startLockout(seconds) {{
+  lockedUntil = Date.now() + seconds * 1000;
+  const btn = document.getElementById('btn');
+  const lockDiv = document.getElementById('lockout');
+  btn.disabled = true;
+  document.getElementById('pwd').disabled = true;
+  if (countdownTimer) clearInterval(countdownTimer);
+  countdownTimer = setInterval(() => {{
+    const rem = remainingSeconds();
+    if (rem <= 0) {{
+      clearInterval(countdownTimer);
+      btn.disabled = false;
+      document.getElementById('pwd').disabled = false;
+      lockDiv.style.display = 'none';
+      document.getElementById('pwd').focus();
+    }} else {{
+      lockDiv.innerHTML = '🔒 Слишком много попыток.<br>Следующая попытка через <strong>' + fmtTime(rem) + '</strong>';
+    }}
+  }}, 500);
+  lockDiv.style.display = 'block';
+  lockDiv.innerHTML = '🔒 Слишком много попыток.<br>Следующая попытка через <strong>' + fmtTime(seconds) + '</strong>';
+}}
+
+// ── Eye icon toggle ─────────────────────────────────────────────────────────
+let pwdVisible = false;
+const EYE_OPEN = '<path d="M1 12s4-8 11-8 11 8 11 8-4 8-11 8-11-8-11-8z"/><circle cx="12" cy="12" r="3"/>';
+const EYE_SHUT = '<path d="M17.94 17.94A10.07 10.07 0 0112 20c-7 0-11-8-11-8a18.45 18.45 0 015.06-5.94"/><path d="M9.9 4.24A9.12 9.12 0 0112 4c7 0 11 8 11 8a18.5 18.5 0 01-2.16 3.19"/><line x1="1" y1="1" x2="23" y2="23"/>';
+
+function toggleEye() {{
+  pwdVisible = !pwdVisible;
+  const inp = document.getElementById('pwd');
+  inp.type = pwdVisible ? 'text' : 'password';
+  document.getElementById('eyeIcon').innerHTML = pwdVisible ? EYE_SHUT : EYE_OPEN;
+  inp.focus();
+}}
+
+// ── Decrypt ─────────────────────────────────────────────────────────────────
 function b64ToBytes(b64){{return Uint8Array.from(atob(b64),c=>c.charCodeAt(0));}}
 
 async function unlock(){{
+  if (remainingSeconds() > 0) return;
   const pwd=document.getElementById('pwd').value;
   if(!pwd)return;
   document.getElementById('err').style.display='none';
@@ -717,10 +789,23 @@ async function unlock(){{
     const html=new TextDecoder().decode(plain);
     document.open();document.write(html);document.close();
   }}catch(e){{
+    failCount++;
     document.getElementById('spinner').style.display='none';
-    document.getElementById('err').style.display='block';
     document.getElementById('btn').disabled=false;
     document.getElementById('pwd').select();
+    // Determine lockout tier
+    const lockAfter = 5; // lock after this many total fails
+    if (failCount >= lockAfter) {{
+      const tier = Math.min(failCount - lockAfter, LOCKOUT_STEPS.length - 1);
+      startLockout(LOCKOUT_STEPS[tier]);
+      document.getElementById('err').style.display='none';
+    }} else {{
+      const remaining = lockAfter - failCount;
+      const errDiv = document.getElementById('err');
+      errDiv.style.display='block';
+      errDiv.innerHTML = 'Неверный пароль' +
+        (remaining <= 2 ? '<div class="attempts-hint">⚠ Ещё ' + remaining + ' попытк' + (remaining===1?'а':'и') + ' до блокировки</div>' : '');
+    }}
   }}
 }}
 document.getElementById('pwd').addEventListener('keydown',e=>{{if(e.key==='Enter')unlock();}});
