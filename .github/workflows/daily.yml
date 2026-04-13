@@ -3,7 +3,7 @@ name: Daily Stepik Stats
 on:
   schedule:
     # Runs at 08:00 UTC = 11:00 Moscow time every day
-    - cron: '0 8 * * *'
+    - cron: '0 3 * * *'
   workflow_dispatch:   # allows manual run from GitHub Actions UI
 
 jobs:
